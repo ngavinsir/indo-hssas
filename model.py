@@ -2,6 +2,16 @@ import pytorch_lightning as pl
 from torch import nn
 import torch
 
+class SentenceEncoder(nn.Module):
+    def __init__(self, hidden_size):
+        super(SentenceEncoder, self).__init__()
+        self.lstm = nn.LSTM(2 * hidden_size, hidden_size, bidirectional=True)
+
+    def forward(self, sentence_vectors):
+        sentence_vectors.unsqueeze_(0)
+        y, _ = self.lstm(sentence_vectors)
+        return y
+
 class WordAttention(nn.Module):
     def __init__(self, attention_size, lstm_hidden_size):
         super(WordAttention, self).__init__()
@@ -35,6 +45,7 @@ class HSSAS(pl.LightningModule):
         self.embedding = nn.Embedding(len(vocab), embedding_dim).from_pretrained(vocab.vectors)
         self.word_encoder = WordEncoder(lstm_hidden_size, embedding_dim)
         self.word_attention = WordAttention(attention_size, lstm_hidden_size)
+        self.sentence_encoder = SentenceEncoder(lstm_hidden_size)
 
     def forward(self, sentences):
         sentence_embeddings = [
@@ -51,5 +62,7 @@ class HSSAS(pl.LightningModule):
             sentence_vector = torch.mm(word_attention_weights, word_encoder_hidden_states)
             sentence_vectors.append(sentence_vector)
         sentence_vectors = torch.cat(sentence_vectors, 0)
-        print(sentence_vectors.shape)
+        
+        sentence_encoder_hidden_states = self.sentence_encoder(sentence_vectors)
+        print(sentence_encoder_hidden_states.shape)
         return 0
