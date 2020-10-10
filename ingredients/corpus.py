@@ -26,7 +26,7 @@ def cfg():
     # file encoding
     encoding = 'utf-8'
     # path to train oracle JSONL file
-    train = 'train.jsonl'
+    train = '../../indosum/indosum/train.01.jsonl'
     # path to dev oracle JSONL file
     dev = None
     # path to test oracle JSONL file
