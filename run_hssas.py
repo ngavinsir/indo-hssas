@@ -22,6 +22,8 @@ def config():
     embedding_dim = 300
     # lstm hidden size
     lstm_hidden_size = 200
+    # attention size
+    attention_size = 400
 
 @ex.capture
 def prepare_vocab(embedding_path, _log):
@@ -34,9 +36,9 @@ def prepare_vocab(embedding_path, _log):
     return Vocab(counter, vectors=vectors)
 
 @ex.automain
-def evaluate(embedding_dim, lstm_hidden_size):
+def evaluate(embedding_dim, lstm_hidden_size, attention_size):
     vocab = prepare_vocab()
-    hssas = HSSAS(vocab, embedding_dim, lstm_hidden_size)
+    hssas = HSSAS(vocab, embedding_dim, lstm_hidden_size, attention_size)
     for sentences, _ in IndosumDataset(read_train_jsonl()):
         hssas(sentences)
         return
