@@ -40,6 +40,7 @@ def evaluate(embedding_dim, lstm_hidden_size, attention_size):
     vocab = prepare_vocab()
     hssas = HSSAS(vocab, embedding_dim, lstm_hidden_size, attention_size)
     for sentences, _ in IndosumDataset(read_train_jsonl()):
-        hssas(sentences)
+        y = hssas(sentences)
+        print(y)
         return
     

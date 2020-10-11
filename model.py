@@ -1,6 +1,8 @@
 import pytorch_lightning as pl
 from torch import nn
 import torch
+import itertools
+import math
 
 class SentenceEncoder(nn.Module):
     def __init__(self, hidden_size):
@@ -42,11 +44,17 @@ class HSSAS(pl.LightningModule):
         super(HSSAS, self).__init__()
 
         self.vocab = vocab
+        self.lstm_hidden_size = lstm_hidden_size
         self.embedding = nn.Embedding(len(vocab), embedding_dim).from_pretrained(vocab.vectors)
         self.word_encoder = WordEncoder(lstm_hidden_size, embedding_dim)
         self.word_attention = Attention(attention_size, lstm_hidden_size)
         self.sentence_encoder = SentenceEncoder(lstm_hidden_size)
         self.sentence_attention = Attention(attention_size, lstm_hidden_size)
+        self.content = nn.Linear(2 * lstm_hidden_size, 1, bias=False)
+        self.salience = nn.Bilinear(2 * lstm_hidden_size, 2 * lstm_hidden_size, 1, bias=False)
+        self.novelty = nn.Bilinear(2 * lstm_hidden_size, 2 * lstm_hidden_size, 1, bias=False)
+        self.position = nn.Linear(2 * lstm_hidden_size, 1, bias=False)
+        self.bias = nn.Parameter(torch.FloatTensor(1).uniform_(-0.1,0.1))
 
     def forward(self, sentences):
         sentence_embeddings = [
@@ -68,7 +76,30 @@ class HSSAS(pl.LightningModule):
         sentence_encoder_hidden_states.squeeze_(0)
 
         sentence_attention_weights = self.sentence_attention(sentence_encoder_hidden_states)
-        
+
         document_vector = torch.mm(sentence_attention_weights, sentence_encoder_hidden_states)
-        print(document_vector.shape) 
-        return 0
+        
+        o = torch.zeros(1, 2 * self.lstm_hidden_size)
+        probs = []
+        for pos, sentence_vector in enumerate(sentence_vectors[0]):
+            sentence_vector = sentence_vector.view(1, -1)
+
+            C = self.content(sentence_vector)
+            M = self.salience(sentence_vector, document_vector)
+            N = self.novelty(sentence_vector, torch.tanh(o))
+
+            positional_embedding = torch.tensor(
+                list(itertools.chain(
+                    *[[math.sin(pos/(10000**(2*i/(2*self.lstm_hidden_size)))), 
+                        math.cos(pos/(10000**(2*i/(2*self.lstm_hidden_size))))] 
+                    for i in range(self.lstm_hidden_size)]
+                ))
+            ).view(1, -1)
+            P = self.position(positional_embedding)
+
+            prob = torch.sigmoid(C + M - N + P + self.bias)
+            probs.append(prob)
+
+            o = o + torch.mm(prob, sentence_vector)
+
+        return torch.cat(probs).squeeze()
