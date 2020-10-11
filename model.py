@@ -10,7 +10,7 @@ class SentenceEncoder(nn.Module):
         self.lstm = nn.LSTM(2 * hidden_size, hidden_size, bidirectional=True)
 
     def forward(self, sentence_vectors):
-        sentence_vectors.unsqueeze_(0)
+        sentence_vectors = sentence_vectors.unsqueeze(0)
         y, _ = self.lstm(sentence_vectors)
         return y
 
@@ -22,6 +22,7 @@ class Attention(nn.Module):
         self.w2 = nn.Parameter(torch.randn(1, attention_size))
 
     def forward(self, hidden_states):
+        hidden_states = hidden_states.squeeze(0)
         a = torch.mm(self.w1, torch.t(hidden_states))
         a = torch.tanh(a)
         a = torch.mm(self.w2, a)
@@ -34,7 +35,7 @@ class WordEncoder(nn.Module):
         self.lstm = nn.LSTM(embedding_dim, hidden_size, bidirectional=True)
 
     def forward(self, word_embeddings):
-        word_embeddings.unsqueeze_(0)
+        word_embeddings = word_embeddings.unsqueeze(0)
         y, _ = self.lstm(word_embeddings)
         return y
 
@@ -57,31 +58,28 @@ class HSSAS(pl.LightningModule):
         self.bias = nn.Parameter(torch.FloatTensor(1).uniform_(-0.1,0.1))
 
     def forward(self, sentences):
+        torch.autograd.set_detect_anomaly(True)
         sentence_embeddings = [
-            self.embedding(torch.LongTensor([self.vocab.stoi[word] for word in sentence]))
+            self.embedding(torch.tensor([self.vocab.stoi[word] for word in sentence], device=self.device, dtype=torch.long))
             for sentence in sentences
         ]
         sentence_vectors = []
         for i, word_embeddings in enumerate(sentence_embeddings):
             word_encoder_hidden_states = self.word_encoder(word_embeddings)
-            word_encoder_hidden_states.squeeze_(0)
 
             word_attention_weights = self.word_attention(word_encoder_hidden_states)
 
-            sentence_vector = torch.mm(word_attention_weights, word_encoder_hidden_states)
+            sentence_vector = torch.mm(word_attention_weights, word_encoder_hidden_states[0])
             sentence_vectors.append(sentence_vector)
         sentence_vectors = torch.cat(sentence_vectors, 0)
         
         sentence_encoder_hidden_states = self.sentence_encoder(sentence_vectors)
-        sentence_encoder_hidden_states.squeeze_(0)
-
         sentence_attention_weights = self.sentence_attention(sentence_encoder_hidden_states)
-
-        document_vector = torch.mm(sentence_attention_weights, sentence_encoder_hidden_states)
+        document_vector = torch.mm(sentence_attention_weights, sentence_encoder_hidden_states[0])
         
-        o = torch.zeros(1, 2 * self.lstm_hidden_size)
+        o = torch.zeros(1, 2 * self.lstm_hidden_size, requires_grad=True, device=self.device)
         probs = []
-        for pos, sentence_vector in enumerate(sentence_vectors[0]):
+        for pos, sentence_vector in enumerate(sentence_vectors):
             sentence_vector = sentence_vector.view(1, -1)
 
             C = self.content(sentence_vector)
@@ -93,7 +91,8 @@ class HSSAS(pl.LightningModule):
                     *[[math.sin(pos/(10000**(2*i/(2*self.lstm_hidden_size)))), 
                         math.cos(pos/(10000**(2*i/(2*self.lstm_hidden_size))))] 
                     for i in range(self.lstm_hidden_size)]
-                ))
+                )),
+                device=self.device
             ).view(1, -1)
             P = self.position(positional_embedding)
 
@@ -103,3 +102,31 @@ class HSSAS(pl.LightningModule):
             o = o + torch.mm(prob, sentence_vector)
 
         return torch.cat(probs).squeeze()
+    
+    def training_step(self, batch, _):
+        x, y = batch
+        pred = self(x)
+        loss = nn.functional.binary_cross_entropy(pred, y)
+
+        self.log('train_loss', loss)
+        return loss
+
+    def validation_step(self, batch, _):
+        x, y = batch
+        pred = self(x)
+        loss = nn.functional.binary_cross_entropy(pred, y)
+
+        self.log('val_loss', loss, prog_bar=True)
+        return loss
+
+    def test_step(self, batch, _):
+        x, y = batch
+        pred = self(x)
+        loss = nn.functional.binary_cross_entropy(pred, y)
+
+        self.log('test_loss', loss)
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        return optimizer
