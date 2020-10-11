@@ -19,6 +19,8 @@ from typing import Any, Callable, Container, List, Mapping, Optional, Sequence, 
 import itertools
 import re
 import string
+import pytorch_lightning as pl
+from torch.utils.data import DataLoader
 
 
 Word = str
@@ -223,9 +225,26 @@ class IndosumDataset(torch.utils.data.IterableDataset):
 
     def doc_mapper(self, doc):
         sentences = list(map(lambda sent: sent.words, doc.sentences))
-        labels = list(map(lambda sent: 1 if sent.label else 0, doc.sentences))
+        labels = torch.FloatTensor(list(map(lambda sent: 1 if sent.label else 0, doc.sentences)))
         
         return sentences, labels
 
     def __iter__(self):
         return map(self.doc_mapper, self.data_iter)
+
+class IndosumDataModule(pl.LightningDataModule):
+    def __init__(self, train_iter, dev_iter, test_iter):
+        super().__init__()
+        self.train_iter = train_iter
+        self.dev_iter = dev_iter
+        self.test_iter = test_iter
+        self.collate = lambda batch: batch[0]
+
+    def train_dataloader(self):
+        return DataLoader(IndosumDataset(self.train_iter), batch_size=1, collate_fn=self.collate)
+
+    def val_dataloader(self):
+        return DataLoader(IndosumDataset(self.dev_iter), batch_size=1, collate_fn=self.collate)
+
+    def test_dataloader(self):
+        return DataLoader(IndosumDataset(self.test_iter), batch_size=1, collate_fn=self.collate)
