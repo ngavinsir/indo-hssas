@@ -20,6 +20,9 @@ import itertools
 import re
 import string
 import pytorch_lightning as pl
+import logging
+from torchtext.vocab import Vocab, Vectors
+from collections import Counter
 from torch.utils.data import DataLoader
 
 
@@ -28,13 +31,14 @@ Label = Union[bool, float]
 
 
 class Sentence(Sequence[Word]):
-    DELIMITER = '\t\t\t'
+    DELIMITER = "\t\t\t"
 
-    def __init__(self,
-                 words: Sequence[Word],
-                 gold_label: Optional[Label] = None,
-                 pred_label: Optional[Label] = None,
-                 ) -> None:
+    def __init__(
+        self,
+        words: Sequence[Word],
+        gold_label: Optional[Label] = None,
+        pred_label: Optional[Label] = None,
+    ) -> None:
         self.words = words
         self.gold_label = gold_label
         self.pred_label = pred_label
@@ -54,7 +58,7 @@ class Sentence(Sequence[Word]):
         return len(self.words)
 
     def __str__(self) -> str:
-        words_str = ' '.join(self.words)
+        words_str = " ".join(self.words)
         if self.label is None:
             return words_str
 
@@ -62,16 +66,21 @@ class Sentence(Sequence[Word]):
             label = 1 if self.label else 0
         else:
             label = self.label
-        return '{}{}{}'.format(words_str, self.DELIMITER, label)
+        return "{}{}{}".format(words_str, self.DELIMITER, label)
 
-    def filter_words(self, predicate: Callable[[Word], bool]) -> 'Sentence':
+    def filter_words(self, predicate: Callable[[Word], bool]) -> "Sentence":
         return Sentence(
-            list(filter(predicate, self.words)), gold_label=self.gold_label,
-            pred_label=self.pred_label)
+            list(filter(predicate, self.words)),
+            gold_label=self.gold_label,
+            pred_label=self.pred_label,
+        )
 
-    def map_words(self, func: Callable[[Word], Word]) -> 'Sentence':
+    def map_words(self, func: Callable[[Word], Word]) -> "Sentence":
         return Sentence(
-            list(map(func, self.words)), gold_label=self.gold_label, pred_label=self.pred_label)
+            list(map(func, self.words)),
+            gold_label=self.gold_label,
+            pred_label=self.pred_label,
+        )
 
 
 class Paragraph(Sequence[Sentence]):
@@ -97,21 +106,22 @@ class Paragraph(Sequence[Sentence]):
         return len(self.sentences)
 
     def __str__(self) -> str:
-        return '\n'.join(str(sent) for sent in self.sentences)
+        return "\n".join(str(sent) for sent in self.sentences)
 
-    def filter_words(self, predicate: Callable[[Word], bool]) -> 'Paragraph':
+    def filter_words(self, predicate: Callable[[Word], bool]) -> "Paragraph":
         filtered_sents = [sent.filter_words(predicate) for sent in self.sentences]
         return Paragraph([sent for sent in filtered_sents if sent])
 
-    def map_words(self, func: Callable[[Word], Word]) -> 'Paragraph':
+    def map_words(self, func: Callable[[Word], Word]) -> "Paragraph":
         return Paragraph([sent.map_words(func) for sent in self.sentences])
 
     @classmethod
-    def from_sequence(cls,
-                      sents: Sequence[Sequence[Word]],
-                      gold_labels: Optional[Sequence[Label]] = None,
-                      pred_labels: Optional[Sequence[Label]] = None,
-                      ) -> 'Paragraph':
+    def from_sequence(
+        cls,
+        sents: Sequence[Sequence[Word]],
+        gold_labels: Optional[Sequence[Label]] = None,
+        pred_labels: Optional[Sequence[Label]] = None,
+    ) -> "Paragraph":
         gold_labels_ = itertools.repeat(None) if gold_labels is None else gold_labels
         pred_labels_ = itertools.repeat(None) if pred_labels is None else pred_labels
         sentences = []
@@ -121,18 +131,19 @@ class Paragraph(Sequence[Sentence]):
 
 
 class Document(Sequence[Paragraph]):
-    def __init__(self,
-                 paragraphs: Sequence[Paragraph],
-                 summary: Optional[Paragraph] = None,
-                 category: Optional[str] = None,
-                 source: Optional[str] = None,
-                 source_url: Optional[str] = None,
-                 id_: Optional[str] = None,
-                 lower: bool = False,
-                 remove_puncts: bool = False,
-                 replace_digits: bool = False,
-                 stopwords: Optional[Container[Word]] = None,
-                 ) -> None:
+    def __init__(
+        self,
+        paragraphs: Sequence[Paragraph],
+        summary: Optional[Paragraph] = None,
+        category: Optional[str] = None,
+        source: Optional[str] = None,
+        source_url: Optional[str] = None,
+        id_: Optional[str] = None,
+        lower: bool = False,
+        remove_puncts: bool = False,
+        replace_digits: bool = False,
+        stopwords: Optional[Container[Word]] = None,
+    ) -> None:
         self.paragraphs = paragraphs
         self.summary = summary
         self.category = category
@@ -148,17 +159,24 @@ class Document(Sequence[Paragraph]):
 
     def preprocess(self) -> None:
         if self.lower:
-            self.paragraphs = [para.map_words(lambda w: w.lower())
-                               for para in self.paragraphs]
+            self.paragraphs = [
+                para.map_words(lambda w: w.lower()) for para in self.paragraphs
+            ]
         if self.remove_puncts:
-            self.paragraphs = [para.filter_words(lambda w: w not in string.punctuation)
-                               for para in self.paragraphs]
+            self.paragraphs = [
+                para.filter_words(lambda w: w not in string.punctuation)
+                for para in self.paragraphs
+            ]
         if self.replace_digits:
-            self.paragraphs = [para.map_words(lambda w: re.sub(r'\d', '0', w))
-                               for para in self.paragraphs]
+            self.paragraphs = [
+                para.map_words(lambda w: re.sub(r"\d", "0", w))
+                for para in self.paragraphs
+            ]
         if self.stopwords is not None:
-            self.paragraphs = [para.filter_words(lambda w: w not in self.stopwords)  # type: ignore
-                               for para in self.paragraphs]
+            self.paragraphs = [
+                para.filter_words(lambda w: w not in self.stopwords)  # type: ignore
+                for para in self.paragraphs
+            ]
 
     @property
     def words(self) -> List[Word]:
@@ -175,76 +193,139 @@ class Document(Sequence[Paragraph]):
         return len(self.paragraphs)
 
     def __str__(self) -> str:
-        return '\n\n'.join(str(para) for para in self.paragraphs)
+        return "\n\n".join(str(para) for para in self.paragraphs)
 
     @classmethod
-    def from_mapping(cls, obj: Mapping[str, Any], **kwargs) -> 'Document':
+    def from_mapping(cls, obj: Mapping[str, Any], **kwargs) -> "Document":
         paragraphs = cls._get_paragraphs_from_mapping(obj)
-        summary = obj.get('summary')
+        summary = obj.get("summary")
         if summary is not None:
             summary = Paragraph.from_sequence(summary)
         return cls(
-            paragraphs, summary=summary, category=obj.get('category'), source=obj.get('source'),
-            source_url=obj.get('source_url'), id_=obj.get('id'), **kwargs)
+            paragraphs,
+            summary=summary,
+            category=obj.get("category"),
+            source=obj.get("source"),
+            source_url=obj.get("source_url"),
+            id_=obj.get("id"),
+            **kwargs,
+        )
 
     def to_dict(self) -> dict:
         paragraphs = [[sent.words for sent in para] for para in self.paragraphs]
-        res: dict = {'paragraphs': paragraphs}
+        res: dict = {"paragraphs": paragraphs}
 
         if self.summary is not None:
-            res['summary'] = [sent.words for sent in self.summary]
+            res["summary"] = [sent.words for sent in self.summary]
 
-        for attr in 'category source source_url'.split():
+        for attr in "category source source_url".split():
             if getattr(self, attr) is not None:
                 res[attr] = getattr(self, attr)
 
         if self.id_ is not None:
-            res['id'] = self.id_
+            res["id"] = self.id_
 
         gold_labels = [para.labels for para in self.paragraphs]
         if all(lab is not None for lab in itertools.chain.from_iterable(gold_labels)):
-            res['gold_labels'] = gold_labels
+            res["gold_labels"] = gold_labels
 
         pred_labels = [para.pred_labels for para in self.paragraphs]
         if all(lab is not None for lab in itertools.chain.from_iterable(pred_labels)):
-            res['pred_labels'] = pred_labels
+            res["pred_labels"] = pred_labels
 
         return res
 
     @staticmethod
     def _get_paragraphs_from_mapping(obj: Mapping[str, Any]) -> List[Paragraph]:
-        gold_labels = obj.get('gold_labels', itertools.repeat(None))
-        pred_labels = obj.get('pred_labels', itertools.repeat(None))
-        paragraphs = [Paragraph.from_sequence(p, gold_labels=gl, pred_labels=pl)
-                      for p, gl, pl in zip(obj['paragraphs'], gold_labels, pred_labels)]
+        gold_labels = obj.get("gold_labels", itertools.repeat(None))
+        pred_labels = obj.get("pred_labels", itertools.repeat(None))
+        paragraphs = [
+            Paragraph.from_sequence(p, gold_labels=gl, pred_labels=pl)
+            for p, gl, pl in zip(obj["paragraphs"], gold_labels, pred_labels)
+        ]
         return paragraphs
 
-class IndosumDataset(torch.utils.data.IterableDataset):
+
+class IndosumDataset(torch.utils.data.Dataset):
     def __init__(self, data_iter):
-        self.data_iter = data_iter
+        self.data = list(map(self.doc_mapper, data_iter))
 
     def doc_mapper(self, doc):
         sentences = list(map(lambda sent: sent.words, doc.sentences))
-        labels = torch.FloatTensor(list(map(lambda sent: 1 if sent.label else 0, doc.sentences)))
-        
+        labels = torch.FloatTensor(
+            list(map(lambda sent: 1 if sent.label else 0, doc.sentences))
+        )
+
         return sentences, labels
 
-    def __iter__(self):
-        return map(self.doc_mapper, self.data_iter)
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
+
 
 class IndosumDataModule(pl.LightningDataModule):
-    def __init__(self, train_iter, dev_iter, test_iter):
+    def __init__(self, train_iter, dev_iter, test_iter, embedding_path, batch_size=64):
         super().__init__()
-        self.train_iter = train_iter
-        self.dev_iter = dev_iter
-        self.test_iter = test_iter
-        self.collate = lambda batch: batch[0]
+        self.train_data = IndosumDataset(train_iter)
+        self.dev_data = IndosumDataset(dev_iter)
+        self.test_data = IndosumDataset(test_iter)
+        self.dl_kwargs = {
+            "batch_size": batch_size,
+            "collate_fn": self.collate,
+            "num_workers": 8,
+        }
+        self._log = logging.getLogger(__name__)
+        self.vocab = self.prepare_vocab(embedding_path)
+
+    def prepare_vocab(self, embedding_path):
+        self._log.info(f"preparing vocabulary...")
+        counter = Counter()
+        for sentences, _ in self.train_data:
+            counter.update(list(itertools.chain(*sentences)))
+        vectors = Vectors(embedding_path, cache="./")
+        return Vocab(counter, vectors=vectors, min_freq=2)
+
+    def collate(self, batch):
+        x = []
+        y = []
+
+        max_sentence = 0
+        max_word = 0
+        for sentences, labels in batch:
+            if max_sentence < len(sentences):
+                max_sentence = len(sentences)
+            for sentence in sentences:
+                if max_word < len(sentence):
+                    max_word = len(sentence)
+
+        for sentences, labels in batch:
+            results = []
+            for sentence in sentences:
+                sentence = list(map(lambda word: self.vocab.stoi[word], sentence))
+                sentence = sentence + [
+                    self.vocab.stoi["<pad>"] for _ in range(max_word - len(sentence))
+                ]
+                results.append(sentence)
+            for _ in range(max_sentence - len(sentences)):
+                results.append([self.vocab.stoi["<pad>"] for _ in range(max_word)])
+            labels = torch.cat(
+                (
+                    labels,
+                    torch.LongTensor([0 for _ in range(max_sentence - len(sentences))]),
+                )
+            )
+            x.append(results)
+            y.append(labels)
+
+        return torch.LongTensor(x), torch.stack(y)
 
     def train_dataloader(self):
-        return DataLoader(IndosumDataset(self.train_iter), batch_size=1, collate_fn=self.collate)
+        return DataLoader(self.train_data, **self.dl_kwargs)
 
     def val_dataloader(self):
-        return DataLoader(IndosumDataset(self.dev_iter), batch_size=1, collate_fn=self.collate)
+        return DataLoader(self.dev_data, **self.dl_kwargs)
 
     def test_dataloader(self):
-        return DataLoader(IndosumDataset(self.test_iter), batch_size=1, collate_fn=self.collate)
+        return DataLoader(self.test_data, **self.dl_kwargs)
