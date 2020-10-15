@@ -145,6 +145,7 @@ class Document(Sequence[Paragraph]):
         stopwords: Optional[Container[Word]] = None,
     ) -> None:
         self.paragraphs = paragraphs
+        self.preprocessed_paragraphs = paragraphs
         self.summary = summary
         self.category = category
         self.source = source
@@ -159,23 +160,23 @@ class Document(Sequence[Paragraph]):
 
     def preprocess(self) -> None:
         if self.lower:
-            self.paragraphs = [
-                para.map_words(lambda w: w.lower()) for para in self.paragraphs
+            self.preprocessed_paragraphs = [
+                para.map_words(lambda w: w.lower()) for para in self.preprocessed_paragraphs
             ]
         if self.remove_puncts:
-            self.paragraphs = [
+            self.preprocessed_paragraphs = [
                 para.filter_words(lambda w: w not in string.punctuation)
-                for para in self.paragraphs
+                for para in self.preprocessed_paragraphs
             ]
         if self.replace_digits:
-            self.paragraphs = [
+            self.preprocessed_paragraphs = [
                 para.map_words(lambda w: re.sub(r"\d", "0", w))
-                for para in self.paragraphs
+                for para in self.preprocessed_paragraphs
             ]
         if self.stopwords is not None:
-            self.paragraphs = [
+            self.preprocessed_paragraphs = [
                 para.filter_words(lambda w: w not in self.stopwords)  # type: ignore
-                for para in self.paragraphs
+                for para in self.preprocessed_paragraphs
             ]
 
     @property
@@ -185,6 +186,10 @@ class Document(Sequence[Paragraph]):
     @property
     def sentences(self) -> List[Sentence]:
         return list(itertools.chain(*self.paragraphs))
+
+    @property
+    def preprocessed_sentences(self) -> List[Sentence]:
+        return list(itertools.chain(*self.preprocessed_paragraphs))
 
     def __getitem__(self, key):
         return self.paragraphs[key]
@@ -251,11 +256,11 @@ class IndosumDataset(torch.utils.data.Dataset):
         self.data = list(map(self.doc_mapper, data_iter))
 
     def doc_mapper(self, doc):
-        sentences = list(map(lambda sent: sent.words, doc.sentences))
+        sentences = list(map(lambda sent: sent.words, doc.preprocessed_sentences))
         labels = torch.FloatTensor(
-            list(map(lambda sent: 1 if sent.label else 0, doc.sentences))
+            list(map(lambda sent: 1 if sent.label else 0, doc.preprocessed_sentences))
         )
-
+        
         return sentences, labels
 
     def __len__(self):
@@ -266,7 +271,7 @@ class IndosumDataset(torch.utils.data.Dataset):
 
 
 class IndosumDataModule(pl.LightningDataModule):
-    def __init__(self, train_iter, dev_iter, test_iter, embedding_path, batch_size=64):
+    def __init__(self, train_iter, dev_iter, test_iter, embedding_path, batch_size=8):
         super().__init__()
         self.train_data = IndosumDataset(train_iter)
         self.dev_data = IndosumDataset(dev_iter)

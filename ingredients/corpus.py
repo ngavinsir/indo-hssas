@@ -30,7 +30,7 @@ def cfg():
     # path to dev oracle JSONL file
     dev = '../../indosum/indosum/dev.01.jsonl'
     # path to test oracle JSONL file
-    test = '../../indosum/indosum/test.01.jsonl'
+    test = '../../indosum/indosum/test.02.jsonl'
     # whether to lowercase words
     lower = True
     # whether to remove punctuations
