@@ -4,14 +4,23 @@ import shutil
 import tempfile
 from pythonrouge.pythonrouge import Pythonrouge
 from dotenv import load_dotenv
+from sacred.observers import MongoObserver
+import torch
 
 load_dotenv()
 
 SAVE_FILES = os.getenv("SACRED_SAVE_FILES", "false").lower() == "true"
 
 
+def setup_mongo_observer(ex):
+    mongo_url = os.getenv("SACRED_MONGO_URL")
+    db_name = os.getenv("SACRED_DB_NAME")
+    if mongo_url is not None and db_name is not None:
+        ex.observers.append(MongoObserver.create(url=mongo_url, db_name=db_name))
+
+
 def eval_summaries(
-    summaries, docs, logger=None, topk=3, encoding="utf-8", delete_temps=True
+    summaries, docs, logger=None, topk=3, encoding="utf-8", delete_temps=True, log=True
 ):
     if logger is None:
         logger = logging.getLogger(__name__)
@@ -20,11 +29,17 @@ def eval_summaries(
     extract_references = []
     hypotheses = []
     for i, (summary, doc) in enumerate(zip(summaries, docs)):
-        logger.info(f"Generating summary for doc {i+1}")
+        if log:
+            logger.info(f"Generating summary for doc {i+1}")
         topk = min(topk, len(summary))
-        abs_refs = [[" ".join(sent) for sent in doc.summary][:topk]]
-        ext_refs = [[" ".join(sent.words) for sent in doc.sentences if sent.label][:topk]]
-        hyp = [" ".join(doc.sentences[idx].words) for idx in summary.topk(topk)[1]]
+        abs_refs = [[" ".join(sent) for sent in doc.summary]]
+        ext_refs = [
+            [" ".join(sent.words) for sent in doc.sentences if sent.label][:topk]
+        ]
+        hyp = [
+            " ".join(doc.sentences[idx].words)
+            for idx in torch.sort(summary[: len(doc.sentences)].topk(topk)[1])[0]
+        ]
         abstract_references.append(abs_refs)
         extract_references.append(ext_refs)
         hypotheses.append(hyp)
@@ -37,11 +52,14 @@ def eval_summaries(
     ), "Number of extractive references and hypotheses mismatch"
 
     abs_ref_dirname = tempfile.mkdtemp()
-    logger.info("Abstractive references directory: %s", abs_ref_dirname)
     ext_ref_dirname = tempfile.mkdtemp()
-    logger.info("Extractive references directory: %s", ext_ref_dirname)
     hyp_dirname = tempfile.mkdtemp()
-    logger.info("Hypotheses directory: %s", hyp_dirname)
+
+    if log:
+        logger.info("Abstractive references directory: %s", abs_ref_dirname)
+        logger.info("Extractive references directory: %s", ext_ref_dirname)
+        logger.info("Hypotheses directory: %s", hyp_dirname)
+
     for doc_id, (abs_refs, ext_refs, hyp) in enumerate(
         zip(abstract_references, extract_references, hypotheses)
     ):
@@ -65,7 +83,6 @@ def eval_summaries(
         ROUGE_SU4=False,
     )
     abs_score = abs_rouge.calc_score()
-    logger.info("Abstractive ROUGE scores: %s", abs_score)
 
     ext_rouge = Pythonrouge(
         peer_path=hyp_dirname,
@@ -75,10 +92,14 @@ def eval_summaries(
         ROUGE_SU4=False,
     )
     ext_score = ext_rouge.calc_score()
-    logger.info("Extractive ROUGE scores: %s", ext_score)
+
+    if log:
+        logger.info("Abstractive ROUGE scores: %s", abs_score)
+        logger.info("Extractive ROUGE scores: %s", ext_score)
 
     if delete_temps:
-        logger.info("Deleting temporary files and directories")
+        if log:
+            logger.info("Deleting temporary files and directories")
         shutil.rmtree(abs_ref_dirname)
         shutil.rmtree(ext_ref_dirname)
         shutil.rmtree(hyp_dirname)
