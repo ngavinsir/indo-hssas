@@ -3,6 +3,7 @@ from torch import nn
 import torch
 import itertools
 import math
+from utils import eval_summaries
 
 
 class SentenceEncoder(nn.Module):
@@ -45,7 +46,15 @@ class WordEncoder(nn.Module):
 
 
 class HSSAS(pl.LightningModule):
-    def __init__(self, vocab, embedding_dim, lstm_hidden_size, attention_size):
+    def __init__(
+        self,
+        vocab,
+        embedding_dim,
+        lstm_hidden_size,
+        attention_size,
+        val_data,
+        learning_rate=1e-3,
+    ):
         super(HSSAS, self).__init__()
 
         self.save_hyperparameters()
@@ -53,6 +62,7 @@ class HSSAS(pl.LightningModule):
         self.embedding = nn.Embedding(
             len(vocab), embedding_dim, padding_idx=1
         ).from_pretrained(vocab.vectors)
+        self.embedding.weight.requires_grad = False
         self.word_encoder = WordEncoder(lstm_hidden_size, embedding_dim)
         self.word_attention = Attention(attention_size, lstm_hidden_size)
         self.sentence_encoder = SentenceEncoder(lstm_hidden_size)
@@ -67,10 +77,11 @@ class HSSAS(pl.LightningModule):
         self.position = nn.Linear(2 * lstm_hidden_size, 1, bias=False)
         self.bias = nn.Parameter(torch.FloatTensor(1).uniform_(-0.1, 0.1))
 
-    def forward(self, sentences, log=False):
+    def forward(self, sentences, log=False, sigmoid=False):
         sentence_embeddings = self.embedding(sentences)
 
         doc_len, sent_len, word_len, embedding_dim = sentence_embeddings.shape
+
         word_encoder_hidden_states = self.word_encoder(
             sentence_embeddings.view(doc_len * sent_len, word_len, embedding_dim)
         )
@@ -97,7 +108,7 @@ class HSSAS(pl.LightningModule):
 
         o = torch.zeros(doc_len, 2 * self.hparams.lstm_hidden_size, device=self.device)
         probs = [[] for _ in range(doc_len)]
-        for pos in range(sent_len):
+        for i, pos in enumerate(range(sent_len)):
             sentence_vector = sentence_vectors[:, pos, :]
 
             C = self.content(sentence_vector)
@@ -134,6 +145,8 @@ class HSSAS(pl.LightningModule):
             P = self.position(positional_embedding)
 
             batch_prob = C + M - N + P + self.bias
+            if sigmoid:
+                batch_prob = torch.sigmoid(batch_prob)
             for i, prob in enumerate(batch_prob):
                 probs[i].append(prob)
 
@@ -160,7 +173,14 @@ class HSSAS(pl.LightningModule):
         loss = nn.functional.binary_cross_entropy_with_logits(pred, y)
 
         self.log("val_loss", loss.item(), prog_bar=True)
-        return loss
+        return pred
+
+    def validation_epoch_end(self, outputs):
+        abs_score, ext_score = eval_summaries(
+            list(itertools.chain(*outputs)), self.hparams.val_data, log=False
+        )
+        self.log("abs_rouge", abs_score["ROUGE-L-F"], prog_bar=True)
+        self.log("ext_rouge", ext_score["ROUGE-L-F"], prog_bar=True)
 
     def test_step(self, batch, _):
         x, y = batch
@@ -168,8 +188,10 @@ class HSSAS(pl.LightningModule):
         loss = nn.functional.binary_cross_entropy_with_logits(pred, y)
 
         self.log("test_loss", loss)
-        return loss
+        return pred
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adadelta(
+            self.parameters(), lr=self.hparams.learning_rate
+        )
         return optimizer

@@ -13,69 +13,123 @@ from model import HSSAS
 from torch import nn
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from utils import eval_summaries
+from utils import eval_summaries, setup_mongo_observer
+from pytorch_lightning.callbacks import ModelCheckpoint
+from gensim.models import Word2Vec
 
 ex = Experiment(name="run_hssas", ingredients=[corpus_ingredient])
+setup_mongo_observer(ex)
 
 
 @ex.config
 def config():
     # pretrained embedding path
-    embedding_path = "./id-vectors.txt"
+    embedding_path = "./idwiki_word2vec_100.txt"
     # word embedding dimension
-    embedding_dim = 300
+    embedding_dim = 100
     # lstm hidden size
     lstm_hidden_size = 200
     # attention size
     attention_size = 400
     # saved model path
-    model_path = "./lightning_logs/version_138/checkpoints/epoch=6.ckpt"
+    model_path = "./lightning_logs/version_234/checkpoints/epoch=13.ckpt"
     # delete temporary folder to save summaries
     delete_temps = False
+    # batch size
+    batch_size = 8
+    # model's optimizer learning rate
+    learning_rate = 1e-3
+    # resume trainer from path
+    resume_path = "./lightning_logs/version_246/checkpoints/epoch=34.ckpt"
 
 
 @ex.command
-def test():
-    vocab = prepare_vocab()
-    print(len(vocab.vectors))
-
-
-@ex.command
-def train(embedding_dim, lstm_hidden_size, attention_size, embedding_path):
+def test(
+    model_path,
+    embedding_path,
+    batch_size,
+    embedding_dim,
+    lstm_hidden_size,
+    attention_size,
+):
     dm = IndosumDataModule(
-        read_train_jsonl(), read_dev_jsonl(), read_test_jsonl(), embedding_path
+        read_train_jsonl(), read_dev_jsonl(), read_test_jsonl(), embedding_path, 128
     )
     hssas = HSSAS(dm.vocab, embedding_dim, lstm_hidden_size, attention_size)
+    total = 0
+    x = 0
+    for _, y in dm.train_dataloader():
+        total += y[:, 0].sum().item()
+        x += 128
+    print(total, x)
 
-    trainer = pl.Trainer(
-        gpus=1,
-        callbacks=[EarlyStopping(monitor="val_loss")],
-    )
-    trainer.fit(hssas, dm)
 
-
-@ex.automain
+@ex.command
 def evaluate(
     model_path,
     delete_temps,
-    embedding_dim,
     embedding_path,
-    lstm_hidden_size,
-    attention_size,
     _log,
     _run,
+    data_module=None,
 ):
     hssas = HSSAS.load_from_checkpoint(model_path)
 
     docs = read_test_jsonl()
-    dm = IndosumDataModule(
-        read_train_jsonl(), read_dev_jsonl(), read_test_jsonl(), embedding_path
+    if data_module == None:
+        data_module = IndosumDataModule(
+            read_train_jsonl(), read_dev_jsonl(), read_test_jsonl(), embedding_path
+        )
+    summaries = (
+        summary
+        for x, _ in data_module.test_dataloader()
+        for summary in hssas(x, sigmoid=True)
     )
-    summaries = (summary for x, _ in dm.test_dataloader() for summary in hssas(x))
 
-    abs_score, ext_score = eval_summaries(summaries, docs, logger=_log, delete_temps=delete_temps)
+    abs_score, ext_score = eval_summaries(
+        summaries, docs, logger=_log, delete_temps=delete_temps
+    )
     for name, value in abs_score.items():
         _run.log_scalar(name, value)
     for name, value in ext_score.items():
         _run.log_scalar(name, value)
     return abs_score["ROUGE-1-F"], ext_score["ROUGE-1-F"]
+
+
+@ex.automain
+def train(
+    embedding_dim,
+    lstm_hidden_size,
+    attention_size,
+    embedding_path,
+    batch_size,
+    learning_rate,
+    resume_path,
+):
+    dm = IndosumDataModule(
+        read_train_jsonl(),
+        read_dev_jsonl(),
+        read_test_jsonl(),
+        embedding_path,
+        batch_size,
+    )
+    hssas = HSSAS(
+        dm.vocab,
+        embedding_dim,
+        lstm_hidden_size,
+        attention_size,
+        list(read_dev_jsonl()),
+        learning_rate,
+    )
+
+    checkpoint_callback = ModelCheckpoint(monitor="val_loss")
+    trainer = pl.Trainer(
+        gpus=1,
+        callbacks=[EarlyStopping(monitor="val_loss", mode='min', patience=5)],
+        checkpoint_callback=checkpoint_callback,
+        gradient_clip_val=1,
+        resume_from_checkpoint=resume_path,
+        max_epochs=1000,
+    )
+    trainer.fit(hssas, dm)
+    evaluate(model_path=checkpoint_callback.best_model_path, data_module=dm)

@@ -161,7 +161,8 @@ class Document(Sequence[Paragraph]):
     def preprocess(self) -> None:
         if self.lower:
             self.preprocessed_paragraphs = [
-                para.map_words(lambda w: w.lower()) for para in self.preprocessed_paragraphs
+                para.map_words(lambda w: w.lower())
+                for para in self.preprocessed_paragraphs
             ]
         if self.remove_puncts:
             self.preprocessed_paragraphs = [
@@ -260,7 +261,7 @@ class IndosumDataset(torch.utils.data.Dataset):
         labels = torch.FloatTensor(
             list(map(lambda sent: 1 if sent.label else 0, doc.preprocessed_sentences))
         )
-        
+
         return sentences, labels
 
     def __len__(self):
