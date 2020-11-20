@@ -42,6 +42,12 @@ def config():
     # resume trainer from path
     resume_path = "./lightning_logs/version_246/checkpoints/epoch=34.ckpt"
 
+    word2vec_model = './idwiki_word2vec_100.model'
+
+@ex.command
+def model_to_word2vec(word2vec_model):
+    model = Word2Vec.load(word2vec_model)
+    model.wv.save_word2vec_format('word2vec.txt')
 
 @ex.command
 def test(
