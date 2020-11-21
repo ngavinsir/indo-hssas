@@ -272,7 +272,16 @@ class IndosumDataset(torch.utils.data.Dataset):
 
 
 class IndosumDataModule(pl.LightningDataModule):
-    def __init__(self, train_iter, dev_iter, test_iter, embedding_path, batch_size=8):
+    def __init__(
+        self,
+        train_iter,
+        dev_iter,
+        test_iter,
+        embedding_path,
+        max_doc_len=100,
+        max_sen_len=50,
+        batch_size=8,
+    ):
         super().__init__()
         self.train_data = IndosumDataset(train_iter)
         self.dev_data = IndosumDataset(dev_iter)
@@ -284,6 +293,8 @@ class IndosumDataModule(pl.LightningDataModule):
         }
         self._log = logging.getLogger(__name__)
         self.vocab = self.prepare_vocab(embedding_path)
+        self.max_doc_len = max_doc_len
+        self.max_sen_len = max_sen_len
 
     def prepare_vocab(self, embedding_path):
         self._log.info(f"preparing vocabulary...")
@@ -291,7 +302,7 @@ class IndosumDataModule(pl.LightningDataModule):
         for sentences, _ in self.train_data:
             counter.update(list(itertools.chain(*sentences)))
         vectors = Vectors(embedding_path, cache="./")
-        return Vocab(counter, vectors=vectors, min_freq=2)
+        return Vocab(counter, vectors=vectors)
 
     def collate(self, batch):
         x = []
@@ -300,15 +311,20 @@ class IndosumDataModule(pl.LightningDataModule):
         max_sentence = 0
         max_word = 0
         for sentences, labels in batch:
+            sentences = sentences[: self.max_doc_len]
             if max_sentence < len(sentences):
                 max_sentence = len(sentences)
             for sentence in sentences:
+                sentence = sentence[: self.max_sen_len]
                 if max_word < len(sentence):
                     max_word = len(sentence)
 
         for sentences, labels in batch:
+            sentences = sentences[: self.max_doc_len]
+            labels = labels[: self.max_doc_len]
             results = []
             for sentence in sentences:
+                sentence = sentence[: self.max_sen_len]
                 sentence = list(map(lambda word: self.vocab.stoi[word], sentence))
                 sentence = sentence + [
                     self.vocab.stoi["<pad>"] for _ in range(max_word - len(sentence))

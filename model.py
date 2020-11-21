@@ -62,7 +62,6 @@ class HSSAS(pl.LightningModule):
         self.embedding = nn.Embedding(
             len(vocab), embedding_dim, padding_idx=1
         ).from_pretrained(vocab.vectors)
-        self.embedding.weight.requires_grad = False
         self.word_encoder = WordEncoder(lstm_hidden_size, embedding_dim)
         self.word_attention = Attention(attention_size, lstm_hidden_size)
         self.sentence_encoder = SentenceEncoder(lstm_hidden_size)

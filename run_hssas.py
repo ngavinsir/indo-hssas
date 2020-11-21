@@ -32,22 +32,28 @@ def config():
     # attention size
     attention_size = 400
     # saved model path
-    model_path = "./lightning_logs/version_234/checkpoints/epoch=13.ckpt"
+    model_path = "./lightning_logs/version_257/checkpoints/epoch=0.ckpt"
     # delete temporary folder to save summaries
     delete_temps = False
     # batch size
     batch_size = 8
     # model's optimizer learning rate
-    learning_rate = 1e-3
+    learning_rate = 1
+    # max document's sentence length
+    max_doc_len = 100
+    # max sentence's word length
+    max_sen_len = 50
     # resume trainer from path
-    resume_path = "./lightning_logs/version_246/checkpoints/epoch=34.ckpt"
+    resume_path = None
 
-    word2vec_model = './idwiki_word2vec_100.model'
+    word2vec_model = "./idwiki_word2vec_100.model"
+
 
 @ex.command
 def model_to_word2vec(word2vec_model):
     model = Word2Vec.load(word2vec_model)
-    model.wv.save_word2vec_format('word2vec.txt')
+    model.wv.save_word2vec_format("word2vec.txt")
+
 
 @ex.command
 def test(
@@ -75,6 +81,9 @@ def evaluate(
     model_path,
     delete_temps,
     embedding_path,
+    batch_size,
+    max_doc_len,
+    max_sen_len,
     _log,
     _run,
     data_module=None,
@@ -84,7 +93,13 @@ def evaluate(
     docs = read_test_jsonl()
     if data_module == None:
         data_module = IndosumDataModule(
-            read_train_jsonl(), read_dev_jsonl(), read_test_jsonl(), embedding_path
+            read_train_jsonl(),
+            read_dev_jsonl(),
+            read_test_jsonl(),
+            embedding_path,
+            max_doc_len,
+            max_sen_len,
+            batch_size,
         )
     summaries = (
         summary
@@ -109,6 +124,8 @@ def train(
     attention_size,
     embedding_path,
     batch_size,
+    max_doc_len,
+    max_sen_len,
     learning_rate,
     resume_path,
 ):
@@ -117,6 +134,8 @@ def train(
         read_dev_jsonl(),
         read_test_jsonl(),
         embedding_path,
+        max_doc_len,
+        max_sen_len,
         batch_size,
     )
     hssas = HSSAS(
@@ -131,11 +150,11 @@ def train(
     checkpoint_callback = ModelCheckpoint(monitor="val_loss")
     trainer = pl.Trainer(
         gpus=1,
-        callbacks=[EarlyStopping(monitor="val_loss", mode='min', patience=5)],
+        callbacks=[EarlyStopping(monitor="val_loss", mode="min", patience=5)],
         checkpoint_callback=checkpoint_callback,
-        gradient_clip_val=1,
+        gradient_clip_val=5,
         resume_from_checkpoint=resume_path,
-        max_epochs=1000,
+        max_epochs=5000,
     )
     trainer.fit(hssas, dm)
     evaluate(model_path=checkpoint_callback.best_model_path, data_module=dm)
