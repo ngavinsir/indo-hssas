@@ -253,16 +253,54 @@ class Document(Sequence[Paragraph]):
 
 
 class IndosumDataset(torch.utils.data.Dataset):
-    def __init__(self, data_iter):
-        self.data = list(map(self.doc_mapper, data_iter))
+    def __init__(self, data_iter, max_doc_len=100, max_sen_len=50):
+        self.data = self.pad_data(data_iter, max_doc_len, max_sen_len)
 
-    def doc_mapper(self, doc):
-        sentences = list(map(lambda sent: sent.words, doc.preprocessed_sentences))
-        labels = torch.FloatTensor(
-            list(map(lambda sent: 1 if sent.label else 0, doc.preprocessed_sentences))
-        )
+    def pad_data(self, data_iter, max_doc_len, max_sen_len):
+        data = list(data_iter)
+        max_doc = 0
+        max_sen = 0
 
-        return sentences, labels
+        for doc in data:
+            if max_doc < len(doc.preprocessed_sentences):
+                max_doc = len(doc.preprocessed_sentences)
+            for sent in doc.preprocessed_sentences:
+                if max_sen < len(sent.words):
+                    max_sen = len(sent.words)
+        max_doc = min(max_doc, max_doc_len)
+        max_sen = min(max_sen, max_sen_len)
+
+        results = []
+        for doc in data:
+            sentences = list(map(lambda sent: sent.words, doc.preprocessed_sentences))[
+                :max_doc_len
+            ]
+            padded_sentences = []
+            for sent in sentences:
+                sent = sent[:max_sen_len]
+                sent = sent + ["<pad>" for _ in range(max_sen - len(sent))]
+                padded_sentences.append(sent)
+            for _ in range(max_doc - len(padded_sentences)):
+                padded_sentences.append(["<pad>" for _ in range(max_sen)])
+            labels = torch.cat(
+                (
+                    torch.FloatTensor(
+                        list(
+                            map(
+                                lambda sent: 1 if sent.label else 0,
+                                doc.preprocessed_sentences,
+                            )
+                        )[:max_doc_len]
+                    ),
+                    torch.FloatTensor(
+                        [0 for _ in range(max_doc - len(sentences))]
+                    ),
+                )
+            )
+
+            results.append([padded_sentences, labels])
+
+        return results
 
     def __len__(self):
         return len(self.data)
@@ -283,9 +321,9 @@ class IndosumDataModule(pl.LightningDataModule):
         batch_size=8,
     ):
         super().__init__()
-        self.train_data = IndosumDataset(train_iter)
-        self.dev_data = IndosumDataset(dev_iter)
-        self.test_data = IndosumDataset(test_iter)
+        self.train_data = IndosumDataset(train_iter, max_doc_len, max_sen_len)
+        self.dev_data = IndosumDataset(dev_iter, max_doc_len, max_sen_len)
+        self.test_data = IndosumDataset(test_iter, max_doc_len, max_sen_len)
         self.dl_kwargs = {
             "batch_size": batch_size,
             "collate_fn": self.collate,
@@ -293,8 +331,6 @@ class IndosumDataModule(pl.LightningDataModule):
         }
         self._log = logging.getLogger(__name__)
         self.vocab = self.prepare_vocab(embedding_path)
-        self.max_doc_len = max_doc_len
-        self.max_sen_len = max_sen_len
 
     def prepare_vocab(self, embedding_path):
         self._log.info(f"preparing vocabulary...")
@@ -307,38 +343,14 @@ class IndosumDataModule(pl.LightningDataModule):
     def collate(self, batch):
         x = []
         y = []
-
-        max_sentence = 0
-        max_word = 0
         for sentences, labels in batch:
-            sentences = sentences[: self.max_doc_len]
-            if max_sentence < len(sentences):
-                max_sentence = len(sentences)
-            for sentence in sentences:
-                sentence = sentence[: self.max_sen_len]
-                if max_word < len(sentence):
-                    max_word = len(sentence)
-
-        for sentences, labels in batch:
-            sentences = sentences[: self.max_doc_len]
-            labels = labels[: self.max_doc_len]
-            results = []
-            for sentence in sentences:
-                sentence = sentence[: self.max_sen_len]
-                sentence = list(map(lambda word: self.vocab.stoi[word], sentence))
-                sentence = sentence + [
-                    self.vocab.stoi["<pad>"] for _ in range(max_word - len(sentence))
-                ]
-                results.append(sentence)
-            for _ in range(max_sentence - len(sentences)):
-                results.append([self.vocab.stoi["<pad>"] for _ in range(max_word)])
-            labels = torch.cat(
-                (
-                    labels,
-                    torch.LongTensor([0 for _ in range(max_sentence - len(sentences))]),
+            sentences = list(
+                map(
+                    lambda sentence: [self.vocab.stoi[word] for word in sentence],
+                    sentences,
                 )
             )
-            x.append(results)
+            x.append(sentences)
             y.append(labels)
 
         return torch.LongTensor(x), torch.stack(y)

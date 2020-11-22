@@ -5,7 +5,6 @@ import itertools
 import math
 from utils import eval_summaries
 
-
 class SentenceEncoder(nn.Module):
     def __init__(self, hidden_size):
         super(SentenceEncoder, self).__init__()
@@ -76,7 +75,7 @@ class HSSAS(pl.LightningModule):
         self.position = nn.Linear(2 * lstm_hidden_size, 1, bias=False)
         self.bias = nn.Parameter(torch.FloatTensor(1).uniform_(-0.1, 0.1))
 
-    def forward(self, sentences, log=False, sigmoid=False):
+    def forward(self, sentences, log=False):
         sentence_embeddings = self.embedding(sentences)
 
         doc_len, sent_len, word_len, embedding_dim = sentence_embeddings.shape
@@ -143,9 +142,8 @@ class HSSAS(pl.LightningModule):
 
             P = self.position(positional_embedding)
 
-            batch_prob = C + M - N + P + self.bias
-            if sigmoid:
-                batch_prob = torch.sigmoid(batch_prob)
+            batch_prob = torch.sigmoid(C + M - N + P + self.bias)
+
             for i, prob in enumerate(batch_prob):
                 probs[i].append(prob)
 
@@ -161,7 +159,7 @@ class HSSAS(pl.LightningModule):
         x, y = batch
         pred = self(x, log=batch_idx == 0)
 
-        loss = nn.functional.binary_cross_entropy_with_logits(pred, y)
+        loss = nn.functional.binary_cross_entropy(pred, y)
 
         self.log("train_loss", loss)
         return loss
@@ -169,7 +167,7 @@ class HSSAS(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x, y = batch
         pred = self(x)
-        loss = nn.functional.binary_cross_entropy_with_logits(pred, y)
+        loss = nn.functional.binary_cross_entropy(pred, y)
 
         self.log("val_loss", loss.item(), prog_bar=True)
         return pred

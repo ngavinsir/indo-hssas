@@ -102,9 +102,7 @@ def evaluate(
             batch_size,
         )
     summaries = (
-        summary
-        for x, _ in data_module.test_dataloader()
-        for summary in hssas(x, sigmoid=True)
+        summary for x, _ in data_module.test_dataloader() for summary in hssas(x)
     )
 
     abs_score, ext_score = eval_summaries(
