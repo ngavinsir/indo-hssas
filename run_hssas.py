@@ -23,16 +23,17 @@ setup_mongo_observer(ex)
 
 @ex.config
 def config():
+    seed = 472290281
     # pretrained embedding path
     embedding_path = "./idwiki_word2vec_100.txt"
     # word embedding dimension
     embedding_dim = 100
     # lstm hidden size
-    lstm_hidden_size = 200
+    lstm_hidden_size = 100
     # attention size
-    attention_size = 400
+    attention_size = 200
     # saved model path
-    model_path = "./lightning_logs/version_257/checkpoints/epoch=0.ckpt"
+    model_path = "./lightning_logs/version_264/checkpoints/epoch=0.ckpt"
     # delete temporary folder to save summaries
     delete_temps = False
     # batch size
@@ -40,9 +41,11 @@ def config():
     # model's optimizer learning rate
     learning_rate = 1
     # max document's sentence length
-    max_doc_len = 100
+    max_doc_len = 15
     # max sentence's word length
     max_sen_len = 50
+    # maximum gradient clip norm
+    grad_clip_val = 1
     # resume trainer from path
     resume_path = None
 
@@ -78,6 +81,7 @@ def test(
 
 @ex.command
 def evaluate(
+    seed,
     model_path,
     delete_temps,
     embedding_path,
@@ -88,6 +92,7 @@ def evaluate(
     _run,
     data_module=None,
 ):
+    pl.utilities.seed.seed_everything(seed)
     hssas = HSSAS.load_from_checkpoint(model_path)
 
     docs = read_test_jsonl()
@@ -101,6 +106,9 @@ def evaluate(
             max_sen_len,
             batch_size,
         )
+    for x, y in data_module.test_dataloader():
+        print(f"pred: {hssas(x, log=True)}\nlabel: {y}\n")
+    return
     summaries = (
         summary for x, _ in data_module.test_dataloader() for summary in hssas(x)
     )
@@ -117,6 +125,7 @@ def evaluate(
 
 @ex.automain
 def train(
+    seed,
     embedding_dim,
     lstm_hidden_size,
     attention_size,
@@ -124,9 +133,11 @@ def train(
     batch_size,
     max_doc_len,
     max_sen_len,
+    grad_clip_val,
     learning_rate,
     resume_path,
 ):
+    pl.utilities.seed.seed_everything(seed)
     dm = IndosumDataModule(
         read_train_jsonl(),
         read_dev_jsonl(),
@@ -141,6 +152,7 @@ def train(
         embedding_dim,
         lstm_hidden_size,
         attention_size,
+        max_doc_len,
         list(read_dev_jsonl()),
         learning_rate,
     )
@@ -148,9 +160,9 @@ def train(
     checkpoint_callback = ModelCheckpoint(monitor="val_loss")
     trainer = pl.Trainer(
         gpus=1,
-        callbacks=[EarlyStopping(monitor="val_loss", mode="min", patience=5)],
+        callbacks=[EarlyStopping(monitor="val_loss", mode="min", patience=3)],
         checkpoint_callback=checkpoint_callback,
-        gradient_clip_val=5,
+        gradient_clip_val=grad_clip_val,
         resume_from_checkpoint=resume_path,
         max_epochs=5000,
     )

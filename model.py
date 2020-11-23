@@ -5,6 +5,7 @@ import itertools
 import math
 from utils import eval_summaries
 
+
 class SentenceEncoder(nn.Module):
     def __init__(self, hidden_size):
         super(SentenceEncoder, self).__init__()
@@ -51,6 +52,7 @@ class HSSAS(pl.LightningModule):
         embedding_dim,
         lstm_hidden_size,
         attention_size,
+        max_doc_len,
         val_data,
         learning_rate=1e-3,
     ):
@@ -73,15 +75,17 @@ class HSSAS(pl.LightningModule):
             2 * lstm_hidden_size, 2 * lstm_hidden_size, 1, bias=False
         )
         self.position = nn.Linear(2 * lstm_hidden_size, 1, bias=False)
+        self.pos_forward_embed = nn.Embedding(max_doc_len, lstm_hidden_size)
+        self.pos_backward_embed = nn.Embedding(max_doc_len, lstm_hidden_size)
         self.bias = nn.Parameter(torch.FloatTensor(1).uniform_(-0.1, 0.1))
 
-    def forward(self, sentences, log=False):
+    def forward(self, sentences, doc_lens=[], log=False):
         sentence_embeddings = self.embedding(sentences)
 
-        doc_len, sent_len, word_len, embedding_dim = sentence_embeddings.shape
+        batch_len, sent_len, word_len, embedding_dim = sentence_embeddings.shape
 
         word_encoder_hidden_states = self.word_encoder(
-            sentence_embeddings.view(doc_len * sent_len, word_len, embedding_dim)
+            sentence_embeddings.view(batch_len * sent_len, word_len, embedding_dim)
         )
         word_attention_weights = self.word_attention(word_encoder_hidden_states)
 
@@ -90,7 +94,7 @@ class HSSAS(pl.LightningModule):
                 torch.unsqueeze(word_attention_weights, 1), word_encoder_hidden_states
             )
         )
-        sentence_vectors = sentence_vectors.view(doc_len, sent_len, -1)
+        sentence_vectors = sentence_vectors.view(batch_len, sent_len, -1)
 
         sentence_encoder_hidden_states = self.sentence_encoder(sentence_vectors)
         sentence_attention_weights = self.sentence_attention(
@@ -104,43 +108,37 @@ class HSSAS(pl.LightningModule):
             )
         )
 
-        o = torch.zeros(doc_len, 2 * self.hparams.lstm_hidden_size, device=self.device)
-        probs = [[] for _ in range(doc_len)]
+        o = torch.zeros(
+            batch_len,
+            2 * self.hparams.lstm_hidden_size,
+            device=self.device,
+            requires_grad=True,
+        )
+        probs = [[] for _ in range(batch_len)]
         for i, pos in enumerate(range(sent_len)):
             sentence_vector = sentence_vectors[:, pos, :]
 
             C = self.content(sentence_vector)
             M = self.salience(sentence_vector, document_vector)
             N = self.novelty(sentence_vector, torch.tanh(o))
-
-            positional_embedding = torch.tensor(
-                list(
-                    itertools.chain(
-                        *[
-                            [
-                                math.sin(
-                                    pos
-                                    / (
-                                        10000
-                                        ** (2 * i / (2 * self.hparams.lstm_hidden_size))
-                                    )
-                                ),
-                                math.cos(
-                                    pos
-                                    / (
-                                        10000
-                                        ** (2 * i / (2 * self.hparams.lstm_hidden_size))
-                                    )
-                                ),
-                            ]
-                            for i in range(self.hparams.lstm_hidden_size)
-                        ]
-                    )
-                ),
-                device=self.device,
-            ).repeat(doc_len, 1)
+            
+            pos_forward = self.pos_forward_embed(
+                torch.tensor([pos], device=self.device).repeat(batch_len, 1)
+            ).view(batch_len, self.hparams.lstm_hidden_size)
+            pos_backward = self.pos_backward_embed(
+                torch.tensor(
+                    [max(doc_len - pos - 1,0) for doc_len in doc_lens], device=self.device
+                ).view(-1, 1)
+            ).view(batch_len, self.hparams.lstm_hidden_size)
+            positional_embedding = torch.cat((pos_forward, pos_backward), 1)
 
             P = self.position(positional_embedding)
+
+            if log:
+                for doc in range(batch_len):
+                    print(
+                        f"batch {doc+1}, sentence {pos+1}, C: {C[doc].item()}, M: {M[doc].item()}, N: {N[doc].item()}, P: {P[doc].item()}, bias: {self.bias.item()}"
+                    )
 
             batch_prob = torch.sigmoid(C + M - N + P + self.bias)
 
@@ -156,8 +154,9 @@ class HSSAS(pl.LightningModule):
         return torch.cat(labels)
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        pred = self(x, log=batch_idx == 0)
+        x, y, doc_lens = batch
+        pred = self(x, doc_lens=doc_lens)
+        # print(pred)
 
         loss = nn.functional.binary_cross_entropy(pred, y)
 
@@ -165,8 +164,8 @@ class HSSAS(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch
-        pred = self(x)
+        x, y, doc_lens = batch
+        pred = self(x, doc_lens=doc_lens)
         loss = nn.functional.binary_cross_entropy(pred, y)
 
         self.log("val_loss", loss.item(), prog_bar=True)
@@ -178,14 +177,6 @@ class HSSAS(pl.LightningModule):
         )
         self.log("abs_rouge", abs_score["ROUGE-L-F"], prog_bar=True)
         self.log("ext_rouge", ext_score["ROUGE-L-F"], prog_bar=True)
-
-    def test_step(self, batch, _):
-        x, y = batch
-        pred = self(x)
-        loss = nn.functional.binary_cross_entropy_with_logits(pred, y)
-
-        self.log("test_loss", loss)
-        return pred
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adadelta(
