@@ -18,6 +18,13 @@ def setup_mongo_observer(ex):
     if mongo_url is not None and db_name is not None:
         ex.observers.append(MongoObserver.create(url=mongo_url, db_name=db_name))
 
+def extract_preds(outputs):
+    for pred, doc_lens in outputs:
+        start = 0
+        for doc_len in doc_lens:
+            end = start + doc_len
+            yield pred[start:end]
+            start += doc_len
 
 def eval_summaries(
     summaries, docs, logger=None, topk=3, encoding="utf-8", delete_temps=True, log=True
@@ -38,7 +45,7 @@ def eval_summaries(
         ]
         hyp = [
             " ".join(doc.sentences[idx].words)
-            for idx in torch.sort(summary[: len(doc.sentences)].topk(topk)[1])[0]
+            for idx in torch.sort(summary.topk(topk)[1])[0]
         ]
         abstract_references.append(abs_refs)
         extract_references.append(ext_refs)

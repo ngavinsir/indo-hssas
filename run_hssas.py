@@ -13,7 +13,7 @@ from model import HSSAS
 from torch import nn
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from utils import eval_summaries, setup_mongo_observer
+from utils import eval_summaries, setup_mongo_observer, extract_preds
 from pytorch_lightning.callbacks import ModelCheckpoint
 from gensim.models import Word2Vec
 
@@ -29,21 +29,21 @@ def config():
     # word embedding dimension
     embedding_dim = 100
     # lstm hidden size
-    lstm_hidden_size = 200
+    lstm_hidden_size = 100
     # attention size
-    attention_size = 400
+    attention_size = 200
     # saved model path
-    model_path = "./lightning_logs/version_275/checkpoints/epoch=2.ckpt"
+    model_path = "./lightning_logs/version_290/checkpoints/epoch=1.ckpt"
     # delete temporary folder to save summaries
     delete_temps = False
     # batch size
-    batch_size = 4
+    batch_size = 8
     # model's optimizer learning rate
     learning_rate = 1
     # max document's sentence length
-    max_doc_len = 10
+    max_doc_len = 15
     # max sentence's word length
-    max_sen_len = 30
+    max_sen_len = 50
     # maximum gradient clip norm
     grad_clip_val = 1
     # resume trainer from path
@@ -106,14 +106,13 @@ def evaluate(
             max_sen_len,
             batch_size,
         )
-    summaries = (
-        summary
-        for x, _, doc_lens in data_module.test_dataloader()
-        for summary in hssas(x, doc_lens)
-    )
 
+    outputs = (
+        (hssas(x, doc_lens), doc_lens)
+        for x, _, doc_lens in data_module.test_dataloader()
+    )
     abs_score, ext_score = eval_summaries(
-        summaries, docs, logger=_log, delete_temps=delete_temps
+        extract_preds(outputs), docs, logger=_log, delete_temps=delete_temps
     )
     for name, value in abs_score.items():
         _run.log_scalar(name, value)
@@ -164,6 +163,8 @@ def train(
         gradient_clip_val=grad_clip_val,
         resume_from_checkpoint=resume_path,
         max_epochs=5000,
+        limit_train_batches=0.1,
+        limit_val_batches=0.1,
     )
     trainer.fit(hssas, dm)
     evaluate(model_path=checkpoint_callback.best_model_path, data_module=dm)

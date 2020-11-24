@@ -282,9 +282,9 @@ class IndosumDataset(torch.utils.data.Dataset):
                 padded_sentences.append(sent)
             for _ in range(max_doc - len(padded_sentences)):
                 padded_sentences.append(["<pad>" for _ in range(max_sen)])
-            labels = [1 if sen.label else 0 for sen in doc.preprocessed_sentences][
-                :max_doc
-            ] + [0 for _ in range(max_doc - len(sentences))]
+            labels = torch.FloatTensor(
+                [1 if sen.label else 0 for sen in doc.preprocessed_sentences][:max_doc]
+            )
             results.append([padded_sentences, labels, len(sentences)])
 
         return results
@@ -325,7 +325,7 @@ class IndosumDataModule(pl.LightningDataModule):
         for sentences, _, doc_len in self.train_data:
             counter.update(list(itertools.chain(*sentences[:doc_len])))
         vectors = Vectors(embedding_path, cache="./")
-        return Vocab(counter, vectors=vectors, min_freq=3)
+        return Vocab(counter, vectors=vectors)
 
     def collate(self, batch):
         x = []
@@ -342,7 +342,7 @@ class IndosumDataModule(pl.LightningDataModule):
             y.append(labels)
             doc_lens.append(doc_len)
 
-        return (torch.LongTensor(x), torch.FloatTensor(y), torch.LongTensor(doc_lens))
+        return (torch.LongTensor(x), torch.cat(y), torch.LongTensor(doc_lens))
 
     def train_dataloader(self):
         return DataLoader(self.train_data, **self.dl_kwargs)

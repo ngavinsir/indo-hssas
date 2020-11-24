@@ -3,7 +3,7 @@ from torch import nn
 import torch
 import itertools
 import math
-from utils import eval_summaries
+from utils import eval_summaries, extract_preds
 
 
 class SentenceEncoder(nn.Module):
@@ -101,67 +101,58 @@ class HSSAS(pl.LightningModule):
             sentence_encoder_hidden_states
         )
 
-        document_vector = torch.squeeze(
+        document_vectors = torch.squeeze(
             torch.matmul(
                 torch.unsqueeze(sentence_attention_weights, 1),
                 sentence_encoder_hidden_states,
             )
         )
 
-        o = torch.zeros(
-            batch_len,
-            2 * self.hparams.lstm_hidden_size,
-            device=self.device,
-            requires_grad=True,
-        )
-        probs = [[] for _ in range(batch_len)]
-        for i, pos in enumerate(range(sent_len)):
-            sentence_vector = sentence_vectors[:, pos, :]
+        probs = []
+        for doc_index, doc_len in enumerate(doc_lens):
+            o = torch.zeros(
+                2 * self.hparams.lstm_hidden_size,
+                device=self.device,
+                requires_grad=True,
+            )
+            document_vector = document_vectors[doc_index]
+            for pos in range(doc_len):
+                sentence_vector = sentence_vectors[doc_index, pos, :]
 
-            C = self.content(sentence_vector)
-            M = self.salience(sentence_vector, document_vector)
-            N = self.novelty(sentence_vector, torch.tanh(o))
+                C = self.content(sentence_vector)
+                M = self.salience(sentence_vector, document_vector)
+                N = self.novelty(sentence_vector, torch.tanh(o))
 
-            pos_forward = self.pos_forward_embed(
-                torch.tensor([pos], dtype=torch.long, device=self.device).repeat(
-                    batch_len, 1
-                )
-            ).view(batch_len, self.hparams.lstm_hidden_size)
-            pos_backward = self.pos_backward_embed(
-                torch.tensor(
-                    [max(doc_len - pos - 1, 0) for doc_len in doc_lens],
-                    dtype=torch.long,
-                    device=self.device,
-                ).view(-1, 1)
-            ).view(batch_len, self.hparams.lstm_hidden_size)
-            positional_embedding = torch.cat((pos_forward, pos_backward), 1)
-
-            P = self.position(positional_embedding)
-
-            if log:
-                for doc in range(batch_len):
-                    print(
-                        f"batch {doc+1}, sentence {pos+1}, C: {C[doc].item()}, M: {M[doc].item()}, N: {N[doc].item()}, P: {P[doc].item()}, bias: {self.bias.item()}"
+                pos_forward = self.pos_forward_embed(
+                    torch.tensor([pos], dtype=torch.long, device=self.device)
+                ).view(-1)
+                pos_backward = self.pos_backward_embed(
+                    torch.tensor(
+                        [doc_len - pos - 1],
+                        dtype=torch.long,
+                        device=self.device,
                     )
+                ).view(-1)
+                positional_embedding = torch.cat((pos_forward, pos_backward))
 
-            batch_prob = torch.sigmoid(C + M - N + P + self.bias)
+                P = self.position(positional_embedding)
 
-            for i, prob in enumerate(batch_prob):
-                probs[i].append(prob)
+                if log:
+                    for doc in range(batch_len):
+                        print(
+                            f"batch {doc+1}, sentence {pos+1}, C: {C[doc].item()}, M: {M[doc].item()}, N: {N[doc].item()}, P: {P[doc].item()}, bias: {self.bias.item()}"
+                        )
 
-            o = o + (batch_prob * sentence_vector)
+                prob = torch.sigmoid(C + M - N + P + self.bias)
+                o = o + (prob * sentence_vector)
 
-        labels = []
-        for prob in probs:
-            labels.append(torch.cat(prob).view(1, -1))
+                probs.append(prob)
 
-        return torch.cat(labels)
+        return torch.cat(probs)
 
     def training_step(self, batch, batch_idx):
         x, y, doc_lens = batch
         pred = self(x, doc_lens=doc_lens)
-        # print(pred)
-
         loss = nn.functional.binary_cross_entropy(pred, y)
 
         self.log("train_loss", loss)
@@ -173,11 +164,11 @@ class HSSAS(pl.LightningModule):
         loss = nn.functional.binary_cross_entropy(pred, y)
 
         self.log("val_loss", loss.item(), prog_bar=True)
-        return pred
+        return pred, doc_lens
 
     def validation_epoch_end(self, outputs):
         abs_score, ext_score = eval_summaries(
-            list(itertools.chain(*outputs)), self.hparams.val_data, log=False
+            extract_preds(outputs), self.hparams.val_data, log=False
         )
         self.log("abs_rouge", abs_score["ROUGE-L-F"], prog_bar=True)
         self.log("ext_rouge", ext_score["ROUGE-L-F"], prog_bar=True)
