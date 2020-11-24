@@ -29,21 +29,21 @@ def config():
     # word embedding dimension
     embedding_dim = 100
     # lstm hidden size
-    lstm_hidden_size = 100
+    lstm_hidden_size = 200
     # attention size
-    attention_size = 200
+    attention_size = 400
     # saved model path
-    model_path = "./lightning_logs/version_264/checkpoints/epoch=0.ckpt"
+    model_path = "./lightning_logs/version_275/checkpoints/epoch=2.ckpt"
     # delete temporary folder to save summaries
     delete_temps = False
     # batch size
-    batch_size = 8
+    batch_size = 4
     # model's optimizer learning rate
     learning_rate = 1
     # max document's sentence length
-    max_doc_len = 15
+    max_doc_len = 10
     # max sentence's word length
-    max_sen_len = 50
+    max_sen_len = 30
     # maximum gradient clip norm
     grad_clip_val = 1
     # resume trainer from path
@@ -106,11 +106,10 @@ def evaluate(
             max_sen_len,
             batch_size,
         )
-    for x, y in data_module.test_dataloader():
-        print(f"pred: {hssas(x, log=True)}\nlabel: {y}\n")
-    return
     summaries = (
-        summary for x, _ in data_module.test_dataloader() for summary in hssas(x)
+        summary
+        for x, _, doc_lens in data_module.test_dataloader()
+        for summary in hssas(x, doc_lens)
     )
 
     abs_score, ext_score = eval_summaries(

@@ -121,13 +121,17 @@ class HSSAS(pl.LightningModule):
             C = self.content(sentence_vector)
             M = self.salience(sentence_vector, document_vector)
             N = self.novelty(sentence_vector, torch.tanh(o))
-            
+
             pos_forward = self.pos_forward_embed(
-                torch.tensor([pos], device=self.device).repeat(batch_len, 1)
+                torch.tensor([pos], dtype=torch.long, device=self.device).repeat(
+                    batch_len, 1
+                )
             ).view(batch_len, self.hparams.lstm_hidden_size)
             pos_backward = self.pos_backward_embed(
                 torch.tensor(
-                    [max(doc_len - pos - 1,0) for doc_len in doc_lens], device=self.device
+                    [max(doc_len - pos - 1, 0) for doc_len in doc_lens],
+                    dtype=torch.long,
+                    device=self.device,
                 ).view(-1, 1)
             ).view(batch_len, self.hparams.lstm_hidden_size)
             positional_embedding = torch.cat((pos_forward, pos_backward), 1)

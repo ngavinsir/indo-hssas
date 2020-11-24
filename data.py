@@ -322,10 +322,10 @@ class IndosumDataModule(pl.LightningDataModule):
     def prepare_vocab(self, embedding_path):
         self._log.info(f"preparing vocabulary...")
         counter = Counter()
-        for sentences, _, _ in self.train_data:
-            counter.update(list(itertools.chain(*sentences)))
+        for sentences, _, doc_len in self.train_data:
+            counter.update(list(itertools.chain(*sentences[:doc_len])))
         vectors = Vectors(embedding_path, cache="./")
-        return Vocab(counter, vectors=vectors)
+        return Vocab(counter, vectors=vectors, min_freq=3)
 
     def collate(self, batch):
         x = []
