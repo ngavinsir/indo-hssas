@@ -29,15 +29,15 @@ def config():
     # word embedding dimension
     embedding_dim = 100
     # lstm hidden size
-    lstm_hidden_size = 100
+    lstm_hidden_size = 25
     # attention size
-    attention_size = 200
+    attention_size = 50
     # saved model path
-    model_path = "./lightning_logs/version_290/checkpoints/epoch=1.ckpt"
+    model_path = "./lightning_logs/version_304/checkpoints/epoch=9.ckpt"
     # delete temporary folder to save summaries
     delete_temps = False
     # batch size
-    batch_size = 8
+    batch_size = 4
     # model's optimizer learning rate
     learning_rate = 1
     # max document's sentence length
@@ -45,7 +45,7 @@ def config():
     # max sentence's word length
     max_sen_len = 50
     # maximum gradient clip norm
-    grad_clip_val = 1
+    grad_clip_val = 5
     # resume trainer from path
     resume_path = None
 
@@ -60,23 +60,40 @@ def model_to_word2vec(word2vec_model):
 
 @ex.command
 def test(
+    seed,
     model_path,
     embedding_path,
     batch_size,
     embedding_dim,
     lstm_hidden_size,
     attention_size,
+    delete_temps,
+    max_doc_len,
+    max_sen_len,
+    grad_clip_val,
+    learning_rate,
 ):
     dm = IndosumDataModule(
-        read_train_jsonl(), read_dev_jsonl(), read_test_jsonl(), embedding_path, 128
+        read_train_jsonl(), read_dev_jsonl(), read_test_jsonl(), embedding_path, max_doc_len, max_sen_len, 4
     )
-    hssas = HSSAS(dm.vocab, embedding_dim, lstm_hidden_size, attention_size)
-    total = 0
-    x = 0
-    for _, y in dm.train_dataloader():
-        total += y[:, 0].sum().item()
-        x += 128
-    print(total, x)
+    hssas = HSSAS(
+        dm.vocab,
+        embedding_dim,
+        lstm_hidden_size,
+        attention_size,
+        max_doc_len,
+        list(read_dev_jsonl()),
+        learning_rate,
+    )
+    summaries = (
+        summary
+        for x, _, doc_lens in dm.test_dataloader()
+        for summary in hssas(x, doc_lens)
+    )
+    for summary in summaries:
+        print(summary)
+        return
+    return
 
 
 @ex.command
@@ -107,12 +124,14 @@ def evaluate(
             batch_size,
         )
 
-    outputs = (
-        (hssas(x, doc_lens), doc_lens)
+    summaries = (
+        summary
         for x, _, doc_lens in data_module.test_dataloader()
+        for summary in hssas(x, doc_lens)
     )
+
     abs_score, ext_score = eval_summaries(
-        extract_preds(outputs), docs, logger=_log, delete_temps=delete_temps
+        summaries, docs, logger=_log, delete_temps=delete_temps
     )
     for name, value in abs_score.items():
         _run.log_scalar(name, value)
@@ -158,13 +177,13 @@ def train(
     checkpoint_callback = ModelCheckpoint(monitor="val_loss")
     trainer = pl.Trainer(
         gpus=1,
-        callbacks=[EarlyStopping(monitor="val_loss", mode="min", patience=3)],
+        # callbacks=[EarlyStopping(monitor="val_loss", mode="min", patience=3)],
         checkpoint_callback=checkpoint_callback,
         gradient_clip_val=grad_clip_val,
         resume_from_checkpoint=resume_path,
         max_epochs=5000,
-        limit_train_batches=0.1,
-        limit_val_batches=0.1,
+        limit_train_batches=.01,
+        limit_val_batches=.01
     )
     trainer.fit(hssas, dm)
     evaluate(model_path=checkpoint_callback.best_model_path, data_module=dm)

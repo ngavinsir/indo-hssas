@@ -283,7 +283,8 @@ class IndosumDataset(torch.utils.data.Dataset):
             for _ in range(max_doc - len(padded_sentences)):
                 padded_sentences.append(["<pad>" for _ in range(max_sen)])
             labels = torch.FloatTensor(
-                [1 if sen.label else 0 for sen in doc.preprocessed_sentences][:max_doc]
+                [1 if sen.label else 0 for sen in doc.preprocessed_sentences][:max_doc
+                ] + [0 for _ in range(max_doc - len(sentences))]
             )
             results.append([padded_sentences, labels, len(sentences)])
 
@@ -342,7 +343,7 @@ class IndosumDataModule(pl.LightningDataModule):
             y.append(labels)
             doc_lens.append(doc_len)
 
-        return (torch.LongTensor(x), torch.cat(y), torch.LongTensor(doc_lens))
+        return (torch.LongTensor(x), torch.stack(y), torch.LongTensor(doc_lens))
 
     def train_dataloader(self):
         return DataLoader(self.train_data, **self.dl_kwargs)

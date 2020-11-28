@@ -26,9 +26,9 @@ class Attention(nn.Module):
         self.w2 = nn.Parameter(torch.randn(attention_size))
 
     def forward(self, hidden_states):
-        a = torch.matmul(hidden_states, self.w1)
-        a = torch.tanh(a)
-        a = torch.matmul(a, self.w2)
+        a = torch.matmul(hidden_states, self.w1) # (N,2U) (2U,K) = (N,K)
+        a = torch.tanh(a) 
+        a = torch.matmul(a, self.w2) # (N,K) (K) = (N)
         a = nn.functional.softmax(a, dim=0)
         return a
 
@@ -87,6 +87,7 @@ class HSSAS(pl.LightningModule):
         word_encoder_hidden_states = self.word_encoder(
             sentence_embeddings.view(batch_len * sent_len, word_len, embedding_dim)
         )
+        
         word_attention_weights = self.word_attention(word_encoder_hidden_states)
 
         sentence_vectors = torch.squeeze(
@@ -108,14 +109,14 @@ class HSSAS(pl.LightningModule):
             )
         )
 
-        probs = []
+        batch_probs = [[] for _ in range(batch_len)]
         for doc_index, doc_len in enumerate(doc_lens):
             o = torch.zeros(
                 2 * self.hparams.lstm_hidden_size,
                 device=self.device,
-                requires_grad=True,
             )
             document_vector = document_vectors[doc_index]
+            probs = []
             for pos in range(doc_len):
                 sentence_vector = sentence_vectors[doc_index, pos, :]
 
@@ -137,23 +138,25 @@ class HSSAS(pl.LightningModule):
 
                 P = self.position(positional_embedding)
 
-                if log:
-                    for doc in range(batch_len):
-                        print(
-                            f"batch {doc+1}, sentence {pos+1}, C: {C[doc].item()}, M: {M[doc].item()}, N: {N[doc].item()}, P: {P[doc].item()}, bias: {self.bias.item()}"
-                        )
-
                 prob = torch.sigmoid(C + M - N + P + self.bias)
                 o = o + (prob * sentence_vector)
 
-                probs.append(prob)
+                if log:
+                    print(
+                        f"doc {doc_index+1}, sentence {pos+1}, C: {C.item():10.4f}, M: {M.item():10.4f}, N: {N.item():10.4f}, bias: {self.bias.item():10.4f}, prob: {prob.item():10.4f}, o: {o}"
+                    )
 
-        return torch.cat(probs)
+                probs.append(prob)
+            probs += torch.zeros(1, sent_len-doc_len, device=self.device)
+            batch_probs[doc_index] = torch.cat(probs)
+
+        return torch.stack(batch_probs)
 
     def training_step(self, batch, batch_idx):
         x, y, doc_lens = batch
         pred = self(x, doc_lens=doc_lens)
-        loss = nn.functional.binary_cross_entropy(pred, y)
+        # print(f"\npred: {pred}\nlabel: {y}")
+        loss = nn.functional.binary_cross_entropy(pred, y, reduction='sum')
 
         self.log("train_loss", loss)
         return loss
@@ -161,14 +164,14 @@ class HSSAS(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x, y, doc_lens = batch
         pred = self(x, doc_lens=doc_lens)
-        loss = nn.functional.binary_cross_entropy(pred, y)
+        loss = nn.functional.binary_cross_entropy(pred, y, reduction='sum')
 
         self.log("val_loss", loss.item(), prog_bar=True)
-        return pred, doc_lens
+        return pred
 
     def validation_epoch_end(self, outputs):
         abs_score, ext_score = eval_summaries(
-            extract_preds(outputs), self.hparams.val_data, log=False
+            (summary for output in outputs for summary in output), self.hparams.val_data, log=False
         )
         self.log("abs_rouge", abs_score["ROUGE-L-F"], prog_bar=True)
         self.log("ext_rouge", ext_score["ROUGE-L-F"], prog_bar=True)
