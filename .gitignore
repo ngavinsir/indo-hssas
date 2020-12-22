@@ -2,3 +2,7 @@
 lightning_logs/*
 .env
 id-vectors.txt*
+*.model
+*.npy
+*.txt
+*.pt
