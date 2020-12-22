@@ -81,7 +81,6 @@ class HSSAS(pl.LightningModule):
 
     def forward(self, sentences, doc_lens=[], log=False):
         sentence_embeddings = self.embedding(sentences)
-
         batch_len, sent_len, word_len, embedding_dim = sentence_embeddings.shape
 
         word_encoder_hidden_states = self.word_encoder(
@@ -110,6 +109,11 @@ class HSSAS(pl.LightningModule):
         )
 
         batch_probs = [[] for _ in range(batch_len)]
+        Cs = []
+        Ms = []
+        Ns = []
+        Ps = []
+        Pros = []
         for doc_index, doc_len in enumerate(doc_lens):
             o = torch.zeros(
                 2 * self.hparams.lstm_hidden_size,
@@ -139,6 +143,15 @@ class HSSAS(pl.LightningModule):
                 P = self.position(positional_embedding)
 
                 prob = torch.sigmoid(C + M - N + P + self.bias)
+
+                if doc_index == 0:
+                    Cs.append(C.item())
+                    Ms.append(M.item())
+                    Ns.append(N.item())
+                    Ps.append(P.item())
+                    Pros.append(prob.item())
+                    # print(C, M, N, P, prob)
+
                 o = o + (prob * sentence_vector)
 
                 if log:
@@ -149,7 +162,7 @@ class HSSAS(pl.LightningModule):
                 probs.append(prob)
             probs += torch.zeros(1, sent_len-doc_len, device=self.device)
             batch_probs[doc_index] = torch.cat(probs)
-
+        # print(f"{Cs}\n{Ms}\n{Ns}\n{Ps}\n{Pros}")
         return torch.stack(batch_probs)
 
     def training_step(self, batch, batch_idx):
@@ -170,11 +183,10 @@ class HSSAS(pl.LightningModule):
         return pred
 
     def validation_epoch_end(self, outputs):
-        abs_score, ext_score = eval_summaries(
+        score = eval_summaries(
             (summary for output in outputs for summary in output), self.hparams.val_data, log=False
         )
-        self.log("abs_rouge", abs_score["ROUGE-L-F"], prog_bar=True)
-        self.log("ext_rouge", ext_score["ROUGE-L-F"], prog_bar=True)
+        self.log("rouge_l", score["ROUGE-L-F"], prog_bar=True)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adadelta(

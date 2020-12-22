@@ -29,15 +29,15 @@ def config():
     # word embedding dimension
     embedding_dim = 100
     # lstm hidden size
-    lstm_hidden_size = 25
+    lstm_hidden_size = 150
     # attention size
-    attention_size = 50
+    attention_size = 300
     # saved model path
-    model_path = "./lightning_logs/version_304/checkpoints/epoch=9.ckpt"
+    model_path = "./lightning_logs/version_387/checkpoints/epoch=2.ckpt"
     # delete temporary folder to save summaries
     delete_temps = False
     # batch size
-    batch_size = 4
+    batch_size = 12
     # model's optimizer learning rate
     learning_rate = 1
     # max document's sentence length
@@ -72,27 +72,27 @@ def test(
     max_sen_len,
     grad_clip_val,
     learning_rate,
+    _log,
 ):
+    pl.utilities.seed.seed_everything(seed)
+    hssas = HSSAS.load_from_checkpoint(model_path)
     dm = IndosumDataModule(
         read_train_jsonl(), read_dev_jsonl(), read_test_jsonl(), embedding_path, max_doc_len, max_sen_len, 4
     )
-    hssas = HSSAS(
-        dm.vocab,
-        embedding_dim,
-        lstm_hidden_size,
-        attention_size,
-        max_doc_len,
-        list(read_dev_jsonl()),
-        learning_rate,
-    )
+ 
     summaries = (
         summary
         for x, _, doc_lens in dm.test_dataloader()
         for summary in hssas(x, doc_lens)
     )
-    for summary in summaries:
-        print(summary)
-        return
+    
+    eval_summaries(
+        summaries, 
+        list(read_test_jsonl())[1509:1511], 
+        logger=_log, 
+        delete_temps=delete_temps
+    )
+
     return
 
 
@@ -113,6 +113,7 @@ def evaluate(
     hssas = HSSAS.load_from_checkpoint(model_path)
 
     docs = read_test_jsonl()
+    # docs = (doc for doc in docs if any([True for sent in doc.sentences if sent.label and len(sent.words) >= 70]))
     if data_module == None:
         data_module = IndosumDataModule(
             read_train_jsonl(),
@@ -126,18 +127,19 @@ def evaluate(
 
     summaries = (
         summary
-        for x, _, doc_lens in data_module.test_dataloader()
+        for x, y, doc_lens in data_module.test_dataloader()
         for summary in hssas(x, doc_lens)
     )
 
-    abs_score, ext_score = eval_summaries(
-        summaries, docs, logger=_log, delete_temps=delete_temps
+    score = eval_summaries(
+        summaries, 
+        (d for d in docs if 1 not in [1 if sent.label else 0 for sent in d.sentences[:6]]), 
+        logger=_log, 
+        delete_temps=delete_temps
     )
-    for name, value in abs_score.items():
+    for name, value in score.items():
         _run.log_scalar(name, value)
-    for name, value in ext_score.items():
-        _run.log_scalar(name, value)
-    return abs_score["ROUGE-1-F"], ext_score["ROUGE-1-F"]
+    return score["ROUGE-1-F"]
 
 
 @ex.automain
@@ -177,13 +179,12 @@ def train(
     checkpoint_callback = ModelCheckpoint(monitor="val_loss")
     trainer = pl.Trainer(
         gpus=1,
-        # callbacks=[EarlyStopping(monitor="val_loss", mode="min", patience=3)],
+        callbacks=[EarlyStopping(monitor="val_loss", mode="min", patience=3)],
         checkpoint_callback=checkpoint_callback,
         gradient_clip_val=grad_clip_val,
         resume_from_checkpoint=resume_path,
         max_epochs=5000,
-        limit_train_batches=.01,
-        limit_val_batches=.01
     )
+    torch.autograd.set_detect_anomaly(True)
     trainer.fit(hssas, dm)
     evaluate(model_path=checkpoint_callback.best_model_path, data_module=dm)

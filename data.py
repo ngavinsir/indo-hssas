@@ -164,16 +164,19 @@ class Document(Sequence[Paragraph]):
                 para.map_words(lambda w: w.lower())
                 for para in self.preprocessed_paragraphs
             ]
+            # self.summary = self.summary.map_words(lambda w: w.lower())
         if self.remove_puncts:
             self.preprocessed_paragraphs = [
                 para.filter_words(lambda w: w not in string.punctuation)
                 for para in self.preprocessed_paragraphs
             ]
+            # self.summary = self.summary.filter_words(lambda w: w not in string.punctuation)
         if self.replace_digits:
             self.preprocessed_paragraphs = [
                 para.map_words(lambda w: re.sub(r"\d", "0", w))
                 for para in self.preprocessed_paragraphs
             ]
+            # self.summary = self.summary.map_words(lambda w: re.sub(r"\d", "0", w))
         if self.stopwords is not None:
             self.preprocessed_paragraphs = [
                 para.filter_words(lambda w: w not in self.stopwords)  # type: ignore
@@ -253,10 +256,10 @@ class Document(Sequence[Paragraph]):
 
 
 class IndosumDataset(torch.utils.data.Dataset):
-    def __init__(self, data_iter, max_doc_len=100, max_sen_len=50):
-        self.data = self.pad_data(data_iter, max_doc_len, max_sen_len)
+    def __init__(self, data_iter, max_doc_len=100, max_sen_len=50, filter=False):
+        self.data = self.pad_data(data_iter, max_doc_len, max_sen_len, filter)
 
-    def pad_data(self, data_iter, max_doc_len, max_sen_len):
+    def pad_data(self, data_iter, max_doc_len, max_sen_len, filter):
         data = list(data_iter)
         max_doc = 0
         max_sen = 0
@@ -286,7 +289,8 @@ class IndosumDataset(torch.utils.data.Dataset):
                 [1 if sen.label else 0 for sen in doc.preprocessed_sentences][:max_doc
                 ] + [0 for _ in range(max_doc - len(sentences))]
             )
-            results.append([padded_sentences, labels, len(sentences)])
+            if 1 not in labels[:0]:
+                results.append([padded_sentences, labels, len(sentences)])
 
         return results
 
@@ -311,7 +315,7 @@ class IndosumDataModule(pl.LightningDataModule):
         super().__init__()
         self.train_data = IndosumDataset(train_iter, max_doc_len, max_sen_len)
         self.dev_data = IndosumDataset(dev_iter, max_doc_len, max_sen_len)
-        self.test_data = IndosumDataset(test_iter, max_doc_len, max_sen_len)
+        self.test_data = IndosumDataset(test_iter, max_doc_len, max_sen_len, filter=False)
         self.dl_kwargs = {
             "batch_size": batch_size,
             "collate_fn": self.collate,
