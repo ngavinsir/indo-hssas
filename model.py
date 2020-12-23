@@ -1,5 +1,6 @@
 import pytorch_lightning as pl
 from torch import nn
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence
 import torch
 import itertools
 import math
@@ -79,14 +80,20 @@ class HSSAS(pl.LightningModule):
         self.pos_backward_embed = nn.Embedding(max_doc_len, lstm_hidden_size)
         self.bias = nn.Parameter(torch.FloatTensor(1).uniform_(-0.1, 0.1))
 
-    def forward(self, sentences, doc_lens=[], log=False):
-        sentence_embeddings = self.embedding(sentences)
-        batch_len, sent_len, word_len, embedding_dim = sentence_embeddings.shape
+    def forward(self, sentences, doc_lens=[], batch_sent_lens=[], log=False):
+        word_embeddings = self.embedding(sentences)
+        batch_len, word_len, embedding_dim = word_embeddings.shape
 
-        word_encoder_hidden_states = self.word_encoder(
-            sentence_embeddings.view(batch_len * sent_len, word_len, embedding_dim)
+        packed_word_embeddings = pack_padded_sequence(
+            word_embeddings, 
+            torch.LongTensor(batch_sent_lens), 
+            batch_first=True,
+            enforce_sorted=False,
         )
-        
+        packed_word_encoder_hidden_states = self.word_encoder(packed_word_embeddings)
+        word_encoder_hidden_states, _ = pad_packed_sequence(
+            packed_word_encoder_hidden_states, batch_first=True
+        )
         word_attention_weights = self.word_attention(word_encoder_hidden_states)
 
         sentence_vectors = torch.squeeze(
@@ -94,9 +101,24 @@ class HSSAS(pl.LightningModule):
                 torch.unsqueeze(word_attention_weights, 1), word_encoder_hidden_states
             )
         )
-        sentence_vectors = sentence_vectors.view(batch_len, sent_len, -1)
 
-        sentence_encoder_hidden_states = self.sentence_encoder(sentence_vectors)
+        n = 0
+        batch_sentence_vectors = []
+        for doc_len in doc_lens:
+            batch_sentence_vectors.append(sentence_vectors[n:n+doc_len])
+            n += doc_len
+        padded_sentence_vectors = pad_sequence(batch_sentence_vectors, batch_first=True)
+        packed_sentence_vectors = pack_padded_sequence(
+            padded_sentence_vectors, 
+            torch.LongTensor(doc_lens), 
+            batch_first=True,
+            enforce_sorted=False,
+        )
+
+        packed_sentence_encoder_hidden_states = self.sentence_encoder(packed_sentence_vectors)
+        sentence_encoder_hidden_states, _ = pad_packed_sequence(
+            packed_sentence_encoder_hidden_states, batch_first=True
+        )
         sentence_attention_weights = self.sentence_attention(
             sentence_encoder_hidden_states
         )
@@ -108,7 +130,7 @@ class HSSAS(pl.LightningModule):
             )
         )
 
-        batch_probs = [[] for _ in range(batch_len)]
+        batch_probs = []
         Cs = []
         Ms = []
         Ns = []
@@ -122,7 +144,7 @@ class HSSAS(pl.LightningModule):
             document_vector = document_vectors[doc_index]
             probs = []
             for pos in range(doc_len):
-                sentence_vector = sentence_vectors[doc_index, pos, :]
+                sentence_vector = padded_sentence_vectors[doc_index, pos, :]
 
                 C = self.content(sentence_vector)
                 M = self.salience(sentence_vector, document_vector)
@@ -160,23 +182,21 @@ class HSSAS(pl.LightningModule):
                     )
 
                 probs.append(prob)
-            probs += torch.zeros(1, sent_len-doc_len, device=self.device)
-            batch_probs[doc_index] = torch.cat(probs)
-        # print(f"{Cs}\n{Ms}\n{Ns}\n{Ps}\n{Pros}")
-        return torch.stack(batch_probs)
+            
+            batch_probs.append(torch.cat(probs))
+        return pad_sequence(batch_probs, batch_first=True)
 
     def training_step(self, batch, batch_idx):
-        x, y, doc_lens = batch
-        pred = self(x, doc_lens=doc_lens)
-        # print(f"\npred: {pred}\nlabel: {y}")
+        x, y, doc_lens, batch_sent_lens = batch
+        pred = self(x, doc_lens=doc_lens, batch_sent_lens=batch_sent_lens)
         loss = nn.functional.binary_cross_entropy(pred, y, reduction='sum')
 
         self.log("train_loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        x, y, doc_lens = batch
-        pred = self(x, doc_lens=doc_lens)
+        x, y, doc_lens, batch_sent_lens = batch
+        pred = self(x, doc_lens=doc_lens, batch_sent_lens=batch_sent_lens)
         loss = nn.functional.binary_cross_entropy(pred, y, reduction='sum')
 
         self.log("val_loss", loss.item(), prog_bar=True)

@@ -33,7 +33,7 @@ def config():
     # attention size
     attention_size = 300
     # saved model path
-    model_path = "./lightning_logs/version_387/checkpoints/epoch=2.ckpt"
+    model_path = "./lightning_logs/version_391/checkpoints/epoch=6.ckpt"
     # delete temporary folder to save summaries
     delete_temps = False
     # batch size
@@ -82,9 +82,12 @@ def test(
  
     summaries = (
         summary
-        for x, _, doc_lens in dm.test_dataloader()
-        for summary in hssas(x, doc_lens)
+        for x, _, doc_lens, batch_sent_lens in dm.test_dataloader()
+        for summary in hssas(x, doc_lens, batch_sent_lens)
     )
+
+    for s in summaries:
+        return
     
     eval_summaries(
         summaries, 
@@ -127,13 +130,13 @@ def evaluate(
 
     summaries = (
         summary
-        for x, y, doc_lens in data_module.test_dataloader()
-        for summary in hssas(x, doc_lens)
+        for x, y, doc_lens, batch_sent_lens in data_module.test_dataloader()
+        for summary in hssas(x, doc_lens, batch_sent_lens)
     )
 
     score = eval_summaries(
         summaries, 
-        (d for d in docs if 1 not in [1 if sent.label else 0 for sent in d.sentences[:6]]), 
+        (d for d in docs if 1 not in [1 if sent.label else 0 for sent in d.sentences[:0]]), 
         logger=_log, 
         delete_temps=delete_temps
     )
